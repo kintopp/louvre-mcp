@@ -147,17 +147,17 @@ server.tool(
                 content: [
                   {
                     type: "text",
-                    text: `Here is the ${type} image at position ${positionNum} for the artwork with ID ${id}:`, specificImage
+                    text: `Here is the ${type} image at position ${positionNum} for the artwork with ID ${id}: ${specificImage.url}`
                   },
                 ],
               };
             }
             
         // Group images by type
-        const imagesByType: Record<string, any[]> = {};
+        const imagesByType: Record<string, LouvreImage[]> = {};
         
         // Process all images and group them by type
-        artworkDetails.image.forEach((img: any) => {
+        artworkDetails.image.forEach((img: LouvreImage) => {
         const imageType = img.type || 'unspecified';
         if (!imagesByType[imageType]) {
             imagesByType[imageType] = [];
@@ -168,13 +168,21 @@ server.tool(
         // Get available image types
         const availableTypes = Object.keys(imagesByType);
         
+        let imageDetails = '';
+          Object.entries(imagesByType).forEach(([imageType, images]) => {
+              images.forEach((img) => {
+                  imageDetailsSelected += `Type: ${imageType}, URL: ${img.url}\n`;
+              });
+          });
+
         // If type is 'all', return all images
         if (type === 'all' || !type) {
+          
             return {
                 content: [
                 {
                     type: "text",
-                    text: `Here are the images for the artwork with ID ${id}:`, imagesByType
+                    text: `Here are the images for the artwork with ID ${id}:\n${imageDetails}`
                 },
                 ],
             };
@@ -190,12 +198,19 @@ server.tool(
         
         // Sort images by position
         selectedImages.sort((a, b) => a.position - b.position);
+
+        let imageDetailsSelected = '';
+          Object.entries(imagesByType).forEach(([imageType, images]) => {
+              images.forEach((img) => {
+                  imageDetails += `Type: ${imageType}, URL: ${img.url}\n`;
+              });
+          });
         
         return {
             content: [
             {
                 type: "text",
-                text: `Here are the images for the artwork with ID ${id} and type ${type}:`, selectedImages
+                text: `Here are the images for the artwork with ID ${id} and type ${type}:\n${imageDetailsSelected}`
             },
             ],
         };
@@ -233,7 +248,7 @@ server.tool(
     const $ = cheerio.load(html);
     
     // Extract artwork information from the search results
-    const artworks: any[] = [];
+    const artworks: Artwork[] = [];
     
     // Find all artwork cards
     $('#search__grid .card__outer').each((index: number, element: any) => {
@@ -256,24 +271,42 @@ server.tool(
       
       // Add the artwork to the results
       artworks.push({
-        id,
+        ark: id || '', // Assuming 'id' is equivalent to 'ark', defaulting to an empty string if undefined
+        id: id || '',
         title,
-        fullTitle,
-        author,
-        imageUrl: imageUrl ? `https://collections.louvre.fr${imageUrl}` : '',
+        artist: author, // Map 'author' to 'artist'
+        date: '', // Add a placeholder or extract if available
+        medium: '', // Add a placeholder or extract if available
+        dimensions: '', // Add a placeholder or extract if available
+        description: fullTitle, // Use 'fullTitle' as the description
+        image: imageUrl ? [{ position: 0, type: 'thumbnail', url: imageUrl }] : [], // Wrap imageUrl in a LouvreImage array
         url: url ? `https://collections.louvre.fr${url}` : '',
-      });
+    });
     });
     // Get pagination information
     const totalResultsText = $('.search__results__count').text().trim().split(' ')[0] || '0';
     const totalResults = parseInt(totalResultsText.replace(/\D/g, ''));
     const totalPages = Math.ceil(totalResults / 20);
 
+    // Create a string variable to store all artwork information
+let artworksDetails = '';
+artworks.forEach((artwork) => {
+    artworksDetails += `ID: ${artwork.id}\n`;
+    artworksDetails += `Title: ${artwork.title}\n`;
+    artworksDetails += `Artist: ${artwork.artist}\n`;
+    artworksDetails += `Date: ${artwork.date}\n`;
+    artworksDetails += `Medium: ${artwork.medium}\n`;
+    artworksDetails += `Dimensions: ${artwork.dimensions}\n`;
+    artworksDetails += `Description: ${artwork.description}\n`;
+    artworksDetails += `Image URLs: ${artwork.image.map(img => img.url).join(', ')}\n`;
+    artworksDetails += `URL: ${artwork.url}\n\n`;
+});
+
     return {
         content: [
         {
             type: "text",
-            text: `Here are the search results for "${query}" in the Louvre:`,  artworks
+            text: `Here are the search results for "${query}" in the Louvre:\n\n${artworksDetails}`
         },
         ],
     };
