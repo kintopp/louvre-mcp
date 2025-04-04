@@ -238,7 +238,7 @@ server.tool("search-artwork", "search for an artwork in the Louvre", {
         content: [
             {
                 type: "text",
-                text: `Here are the search results for "${query}" in the Louvre:\n\n${artworksDetails}`
+                text: `Here are the search results for "${query}" in the Louvre in Paris:\n\n${artworksDetails}`
             },
         ],
     };
