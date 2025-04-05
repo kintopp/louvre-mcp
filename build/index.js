@@ -88,37 +88,181 @@ server.tool("get-artwork-images", "get images for an artwork in the Louvre", {
     position: z.number().optional().describe("The position of the image to retrieve"),
     open_browser: z.boolean().optional().describe("If true, formats the response for easy URL opening")
 }, async ({ id, type, position, open_browser = false }) => {
-    const artworkDetails = await fetchLouvreAPI(`/${API_URL}/${id}`);
-    
-    if (!artworkDetails.image || artworkDetails.image.length === 0) {
+    try {
+        // First get the artwork details using the API
+        const artworkDetails = await fetchLouvreAPI(`/${API_URL}/${id}`);
+        
+        if (!artworkDetails.image || artworkDetails.image.length === 0) {
+            // If we don't have images from the API, try scraping the HTML page
+            return await getImagesFromHtml(id, type, position, open_browser);
+        }
+        
+        // Process the image data from the API
+        const processedImages = [];
+        
+        // Debug the image structure
+        console.error("Image structure:", JSON.stringify(artworkDetails.image).substring(0, 500));
+        
+        // Handle different possible image data structures
+        if (Array.isArray(artworkDetails.image)) {
+            // If it's an array, process each item
+            artworkDetails.image.forEach((img, index) => {
+                let imgUrl;
+                
+                // Try to get URL based on different possible structures
+                if (typeof img === 'string') {
+                    imgUrl = img;
+                } else if (img && typeof img === 'object') {
+                    // Try common URL property names
+                    imgUrl = img.url || img.uri || img.src || img.path;
+                    
+                    // If still no URL, just stringify the object for debugging
+                    if (!imgUrl && open_browser) {
+                        console.error(`Image ${index} structure:`, JSON.stringify(img).substring(0, 200));
+                    }
+                }
+                
+                // Only add if we found a URL
+                if (imgUrl) {
+                    // Ensure it's an absolute URL
+                    if (imgUrl.startsWith('/')) {
+                        imgUrl = `${BASE_URL}${imgUrl}`;
+                    }
+                    
+                    processedImages.push({
+                        position: index,
+                        type: img.type || 'unspecified',
+                        url: imgUrl
+                    });
+                }
+            });
+        } else if (typeof artworkDetails.image === 'object') {
+            // It might be an object with URLs as properties
+            Object.entries(artworkDetails.image).forEach(([key, value], index) => {
+                let imgUrl;
+                
+                if (typeof value === 'string') {
+                    imgUrl = value;
+                } else if (value && typeof value === 'object' && (value.url || value.uri || value.src)) {
+                    imgUrl = value.url || value.uri || value.src;
+                }
+                
+                if (imgUrl) {
+                    // Ensure it's an absolute URL
+                    if (imgUrl.startsWith('/')) {
+                        imgUrl = `${BASE_URL}${imgUrl}`;
+                    }
+                    
+                    processedImages.push({
+                        position: index,
+                        type: key,
+                        url: imgUrl
+                    });
+                }
+            });
+        }
+        
+        // If we still don't have any images, fall back to HTML scraping
+        if (processedImages.length === 0) {
+            return await getImagesFromHtml(id, type, position, open_browser);
+        }
+        
+        // From here, process the images we found
+        return formatImageResponse(id, type, position, processedImages, open_browser);
+    } catch (error) {
+        console.error("Error getting artwork images:", error);
+        
+        // Fall back to HTML scraping on error
+        return await getImagesFromHtml(id, type, position, open_browser);
+    }
+});
+
+/**
+ * Fallback function to get images by scraping the HTML page
+ */
+async function getImagesFromHtml(id, type, position, open_browser) {
+    try {
+        // Fetch the HTML page for this artwork
+        const response = await axios.get(`${BASE_URL}/${API_URL}/${id}`);
+        const html = response.data;
+        
+        // Use cheerio to parse the HTML
+        const $ = cheerio.load(html);
+        
+        // Find image elements in the page
+        const images = [];
+        
+        // Find regular images
+        $('img').each((index, element) => {
+            const img = $(element);
+            const src = img.attr('src') || img.attr('data-src');
+            const alt = img.attr('alt') || '';
+            
+            if (src) {
+                // Determine image type based on URL or size
+                let imgType = 'unknown';
+                if (src.includes('small') || src.includes('thumb')) {
+                    imgType = 'thumbnail';
+                } else if (src.includes('large') || src.includes('full')) {
+                    imgType = 'full';
+                }
+                
+                // Ensure it's an absolute URL
+                const imgUrl = src.startsWith('/') ? `${BASE_URL}${src}` : src;
+                
+                images.push({
+                    position: index,
+                    type: imgType,
+                    url: imgUrl,
+                    alt: alt
+                });
+            }
+        });
+        
+        // If we found images, format the response
+        if (images.length > 0) {
+            return formatImageResponse(id, type, position, images, open_browser);
+        }
+        
+        // If no images were found, return a failure message
         return {
             content: [
                 {
                     type: "text",
-                    text: `Failed to find images for the artwork with ID ${id}`,
+                    text: `Failed to find images for the artwork with ID ${id}`
+                },
+            ],
+        };
+    } catch (error) {
+        console.error("Error scraping HTML for images:", error);
+        
+        // Return error message
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Error retrieving images for the artwork with ID ${id}: ${error.message}`
                 },
             ],
         };
     }
-    
-    // Fix image URLs if they're relative
-    artworkDetails.image.forEach(img => {
-        if (img.url && img.url.startsWith('/')) {
-            img.url = `${BASE_URL}${img.url}`;
-        }
-    });
-    
+}
+
+/**
+ * Format the image response based on the parameters
+ */
+function formatImageResponse(id, type, position, images, open_browser) {
     // If a specific position is requested, return just that image
     if (position !== undefined) {
         const positionNum = Number(position);
-        const specificImage = artworkDetails.image.find((img) => img.position === positionNum);
+        const specificImage = images.find((img) => img.position === positionNum);
         
         if (!specificImage) {
             return {
                 content: [
                     {
                         type: "text",
-                        text: `Failed to find image at position ${positionNum} for the artwork with ID ${id}`,
+                        text: `Failed to find image at position ${positionNum} for the artwork with ID ${id}`
                     },
                 ],
             };
@@ -142,11 +286,10 @@ server.tool("get-artwork-images", "get images for an artwork in the Louvre", {
         };
     }
     
-    // Group images by type
+    // Group images by type if we're not looking for a specific position
     const imagesByType = {};
     
-    // Process all images and group them by type
-    artworkDetails.image.forEach((img) => {
+    images.forEach((img) => {
         const imageType = img.type || 'unspecified';
         if (!imagesByType[imageType]) {
             imagesByType[imageType] = [];
@@ -157,39 +300,31 @@ server.tool("get-artwork-images", "get images for an artwork in the Louvre", {
     // Get available image types
     const availableTypes = Object.keys(imagesByType);
     
-    // Initialize variables for formatted responses
-    let imageDetails = '';
-    let imageDetailsSelected = '';
-    
-    // Format response based on open_browser flag
-    const formatImageLine = (img, imgType) => {
-        if (open_browser) {
-            return `Type: ${imgType}, URL: ${img.url}\n`;
-        } else {
-            return `Type: ${imgType}, URL: ${img.url}\n`;
-        }
-    };
-    
-    // Populate imageDetails for all images
-    Object.entries(imagesByType).forEach(([imageType, images]) => {
-        images.forEach((img) => {
-            imageDetails += formatImageLine(img, imageType);
-        });
-    });
-    
-    // If type is 'all' or not specified, return all images
-    if (type === 'all' || !type) {
-        let responseText = `Here are the images for the artwork with ID ${id}:`;
+    // If a specific type is requested, filter to just that type
+    if (type !== 'all' && type !== undefined) {
+        // If requested type doesn't exist, use the first available type
+        const selectedType = availableTypes.includes(type)
+            ? type
+            : availableTypes[0] || 'unspecified';
+        
+        // Get images of the selected type
+        const selectedImages = imagesByType[selectedType] || [];
+        
+        // Sort images by position
+        selectedImages.sort((a, b) => a.position - b.position);
+        
+        let responseText = `Here are the images for the artwork with ID ${id} and type ${type}:`;
         
         if (open_browser) {
             responseText += "\n\nClick any of the following links to open in your browser:";
-            Object.entries(imagesByType).forEach(([imageType, images]) => {
-                images.forEach((img, index) => {
-                    responseText += `\n${index + 1}. ${imageType} image: ${img.url}`;
-                });
+            selectedImages.forEach((img, index) => {
+                responseText += `\n${index + 1}. ${selectedType} image: ${img.url}`;
             });
         } else {
-            responseText += `\n\n${imageDetails}`;
+            responseText += "\n\n";
+            selectedImages.forEach((img) => {
+                responseText += `Type: ${selectedType}, URL: ${img.url}\n`;
+            });
         }
         
         return {
@@ -202,31 +337,26 @@ server.tool("get-artwork-images", "get images for an artwork in the Louvre", {
         };
     }
     
-    // If requested type doesn't exist, use the first available type
-    const selectedType = availableTypes.includes(type)
-        ? type
-        : availableTypes[0] || 'unspecified';
-    
-    // Get images of the selected type
-    const selectedImages = imagesByType[selectedType] || [];
-    
-    // Sort images by position
-    selectedImages.sort((a, b) => a.position - b.position);
-    
-    // Populate imageDetailsSelected for selected images
-    selectedImages.forEach((img) => {
-        imageDetailsSelected += formatImageLine(img, selectedType);
-    });
-    
-    let responseText = `Here are the images for the artwork with ID ${id} and type ${type}:`;
+    // For 'all' type or when no type is specified
+    let responseText = `Here are the images for the artwork with ID ${id}:`;
     
     if (open_browser) {
         responseText += "\n\nClick any of the following links to open in your browser:";
-        selectedImages.forEach((img, index) => {
-            responseText += `\n${index + 1}. ${selectedType} image: ${img.url}`;
+        let imgCount = 1;
+        
+        Object.entries(imagesByType).forEach(([imageType, typeImages]) => {
+            typeImages.forEach((img) => {
+                responseText += `\n${imgCount}. ${imageType} image: ${img.url}`;
+                imgCount++;
+            });
         });
     } else {
-        responseText += `\n\n${imageDetailsSelected}`;
+        responseText += "\n\n";
+        Object.entries(imagesByType).forEach(([imageType, typeImages]) => {
+            typeImages.forEach((img) => {
+                responseText += `Type: ${imageType}, URL: ${img.url}\n`;
+            });
+        });
     }
     
     return {
@@ -237,7 +367,7 @@ server.tool("get-artwork-images", "get images for an artwork in the Louvre", {
             },
         ],
     };
-});
+}
 
 server.tool("search-artwork", "search for an artwork in the Louvre", {
     query: z.string().describe("What do you want to search for?"),
@@ -256,7 +386,7 @@ server.tool("search-artwork", "search for an artwork in the Louvre", {
     
     // Format the query for URL
     const formattedQuery = encodeURIComponent(query);
-    const searchUrl = `https://collections.louvre.fr/recherche?page=${page}&q=${formattedQuery}`;
+    const searchUrl = `https://collections.louvre.fr/recherche?page=${page || 1}&q=${formattedQuery}`;
     
     // Fetch the search results page
     const response = await axios.get(searchUrl);
@@ -277,7 +407,7 @@ server.tool("search-artwork", "search for an artwork in the Louvre", {
         
         // Extract the image information
         const imgElement = $(element).find('img');
-        const imageUrl = imgElement.attr('data-src') || '';
+        const imageUrl = imgElement.attr('data-src') || imgElement.attr('src') || '';
         const fullTitle = imgElement.attr('title') || '';
         
         // Extract the title and author
