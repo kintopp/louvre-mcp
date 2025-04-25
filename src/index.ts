@@ -3,6 +3,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import axios from 'axios';
 import { z } from "zod";
 import * as cheerio from 'cheerio';
+import { url } from "inspector";
+import {ArtworkDetails,DateCreated,Creator,CreatorDate,Dimension,AcquisitionDetails,AcquisitionDate,Image} from "./types.js";
 
 const BASE_URL = "https://collections.louvre.fr";
 const API_URL = `ark:/53355`;
@@ -14,43 +16,6 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
-interface Artwork {
-    ark: string;
-    id: string;
-    title: string;
-    artist: string;
-    date: string;
-    medium: string;
-    dimensions: string;
-    description: string;
-    image: LouvreImage[];
-    url: string;
-    }
-
-    interface LouvreImage {
-        position: number;   
-        type: string;
-        url: string;
-    }
-
-
-/**
- * Format artwork data for consistent response
- */
-function formatArtworkData(artwork: any) : Artwork {
-    return {
-      id: artwork.id || artwork.ark,
-      ark: artwork.ark || artwork.id,
-      title: artwork.title || '',
-      artist: artwork.creator || '',
-      date: artwork.date || '',
-      medium: artwork.medium || '',
-      dimensions: artwork.dimensions || '',
-      description: artwork.description || '',
-      image: artwork.image || [],
-      url: `${BASE_URL}/${API_URL}/${artwork.id || artwork.ark}`,
-    };
-  }
 
 /**
  * Helper function to make API requests
@@ -72,7 +37,22 @@ async function fetchLouvreAPI(path: string, params: Record<string, any> = {}) {
     
     try {
       const response = await axios.get(url.toString());
-      return response.data as Artwork;
+      const data = response.data as ArtworkDetails;
+
+      // Ensure all URLs in image data are prefixed with the base URL
+      if (data.image) {
+        data.image = data.image.map((img) => ({
+          ...img,
+          urlImage: img.urlImage.startsWith("https://collections.louvre.fr/")
+            ? img.urlImage
+            : `https://collections.louvre.fr/${img.urlImage}`,
+          urlThumbnail: img.urlThumbnail.startsWith("https://collections.louvre.fr/")
+            ? img.urlThumbnail
+            : `https://collections.louvre.fr/${img.urlThumbnail}`,
+        }));
+      }
+
+      return data;
     } catch (error) {
       console.error('Error fetching from Louvre API:', error);
       throw error;
@@ -86,23 +66,29 @@ server.tool(
         id: z.string().describe("The ID of the artwork")
     },
     async ({id}) => {
-        const response : Artwork = await fetchLouvreAPI(`/${API_URL}/${id}`) as Artwork;
-        return {
-            content: [
-              {
+        const response : ArtworkDetails = await fetchLouvreAPI(`/${API_URL}/${id}`) as ArtworkDetails;
+        
+
+      return {
+        content: [
+            {
                 type: "text",
-                text: `Here are the details for the artwork with ID ${id}:
-                  Title: ${response.title}
-                  Artist: ${response.artist}
-                  Date: ${response.date}
-                  Medium: ${response.medium}
-                  Dimensions: ${response.dimensions}
-                  Description: ${response.description}
-                  Image URLs: ${response.image.join(', ')}
-                  URL: ${response.url}`
-              },
-            ],
-          };
+                text: JSON.stringify({
+                    id: response.id,
+                    title: response.title,
+                    artist: response.creator,
+                    date: response.dateCreated,
+                    medium: response.medium,
+                    dimensions: response.dimension,
+                    location: response.currentLocation || "Unknown", // Add location if available
+                    acquisition: response.acquisitionDetails || "Unknown", // Add acquisition info if available
+                    description: response.description,
+                    imageData: response.image,
+                    url: response.url
+                }),
+            },
+        ],
+    };
     }
 );
 
@@ -147,17 +133,17 @@ server.tool(
                 content: [
                   {
                     type: "text",
-                    text: `Here is the ${type} image at position ${positionNum} for the artwork with ID ${id}: ${specificImage.url}`
+                    text: `Here is the ${type} image at position ${positionNum} for the artwork with ID ${id}: ${specificImage.urlImage}`
                   },
                 ],
               };
             }
             
         // Group images by type
-        const imagesByType: Record<string, LouvreImage[]> = {};
+        const imagesByType: Record<string, Image[]> = {};
         
         // Process all images and group them by type
-        artworkDetails.image.forEach((img: LouvreImage) => {
+        artworkDetails.image.forEach((img: Image) => {
         const imageType = img.type || 'unspecified';
         if (!imagesByType[imageType]) {
             imagesByType[imageType] = [];
@@ -171,7 +157,7 @@ server.tool(
         let imageDetails = '';
           Object.entries(imagesByType).forEach(([imageType, images]) => {
               images.forEach((img) => {
-                  imageDetailsSelected += `Type: ${imageType}, URL: ${img.url}\n`;
+                  imageDetailsSelected += `Type: ${imageType}, URL: ${img.urlImage}\n`;
               });
           });
 
@@ -202,7 +188,7 @@ server.tool(
         let imageDetailsSelected = '';
           Object.entries(imagesByType).forEach(([imageType, images]) => {
               images.forEach((img) => {
-                  imageDetails += `Type: ${imageType}, URL: ${img.url}\n`;
+                  imageDetails += `Type: ${imageType}, URL: ${img.urlImage}\n`;
               });
           });
         
@@ -248,7 +234,7 @@ server.tool(
     const $ = cheerio.load(html);
     
     // Extract artwork information from the search results
-    const artworks: Artwork[] = [];
+    const artworks: ArtworkDetails[] = [];
     
     // Find all artwork cards
     $('#search__grid .card__outer').each((index: number, element: any) => {
@@ -267,46 +253,54 @@ server.tool(
       const title = titleElement.text().trim();
       
       const authorElement = $(element).find('.card__author');
-      const author = authorElement.text().trim();
+      const author = {label: authorElement.text().trim(), attributionLevel: "artist", linkType: "", dates:[], creatorRole: "", authenticationType: "", doubt: "", attributedBy: "", attributedYear: "", wikidata: ""};
       
-      // Add the artwork to the results
-      artworks.push({
-        ark: id || '', // Assuming 'id' is equivalent to 'ark', defaulting to an empty string if undefined
-        id: id || '',
-        title,
-        artist: author, // Map 'author' to 'artist'
-        date: '', // Add a placeholder or extract if available
-        medium: '', // Add a placeholder or extract if available
-        dimensions: '', // Add a placeholder or extract if available
-        description: fullTitle, // Use 'fullTitle' as the description
-        image: imageUrl ? [{ position: 0, type: 'thumbnail', url: imageUrl }] : [], // Wrap imageUrl in a LouvreImage array
+      const currentArtwork : ArtworkDetails = {
+        arkId: id || '', // Assuming 'id' is equivalent to 'ark', defaulting to an empty string if undefined
+        title: title,
+        creator: [author], // Map 'author' to 'artist'
+        dateCreated: [], // Add a placeholder or extract if available
+        dimension: [], // Add a placeholder or extract if available
+        image: imageUrl
+        ? [
+            {
+                copyright: "",
+                position: 0,
+                type: 'face, recto, avers, avant',
+                urlImage: imageUrl.startsWith("https://collections.louvre.fr/")
+                    ? imageUrl
+                    : `https://collections.louvre.fr/${imageUrl}`,
+                urlThumbnail: imageUrl.startsWith("https://collections.louvre.fr/")
+                    ? imageUrl
+                    : `https://collections.louvre.fr/${imageUrl}`,
+            },
+        ]
+        : [],
         url: url ? `https://collections.louvre.fr${url}` : '',
-    });
+        displayDateCreated: "", // Add a placeholder or extract if available
+        currentLocation: "", // Add a placeholder or extract if available
+        room: "", // Add a placeholder or extract if available
+        inscriptions: "", // Add a placeholder or extract if available
+        objectHistory: "", // Add a placeholder or extract if available
+        acquisitionDetails: [], // Add a placeholder or extract if available
+        ownedBy: "", // Add a placeholder or extract if available
+        id: undefined, // Add a placeholder or extract if available
+        medium: "", // Add a placeholder or extract if available
+        description: fullTitle || '', // Add a placeholder or extract if available
+      }
+      // Add the artwork to the results
+      artworks.push(currentArtwork);
     });
     // Get pagination information
     const totalResultsText = $('.search__results__count').text().trim().split(' ')[0] || '0';
     const totalResults = parseInt(totalResultsText.replace(/\D/g, ''));
     const totalPages = Math.ceil(totalResults / 20);
 
-    // Create a string variable to store all artwork information
-let artworksDetails = '';
-artworks.forEach((artwork) => {
-    artworksDetails += `ID: ${artwork.id}\n`;
-    artworksDetails += `Title: ${artwork.title}\n`;
-    artworksDetails += `Artist: ${artwork.artist}\n`;
-    artworksDetails += `Date: ${artwork.date}\n`;
-    artworksDetails += `Medium: ${artwork.medium}\n`;
-    artworksDetails += `Dimensions: ${artwork.dimensions}\n`;
-    artworksDetails += `Description: ${artwork.description}\n`;
-    artworksDetails += `Image URLs: ${artwork.image.map(img => img.url).join(', ')}\n`;
-    artworksDetails += `URL: ${artwork.url}\n\n`;
-});
-
     return {
         content: [
         {
             type: "text",
-            text: `Here are the search results for "${query}" in the Louvre in Paris:\n\n${artworksDetails}`
+            text: JSON.stringify({artworks}),
         },
         ],
     };
