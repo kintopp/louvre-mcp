@@ -97,7 +97,7 @@ server.tool(
     "get images for an artwork in the Louvre",
     {
         id: z.string().describe("The ID of the artwork"),
-        type: z.enum(["thumbnail", "full", "all"]).optional().describe("The type of image to retrieve"),
+        type: z.enum(["thumbnail", "all"]).optional().describe("The type of image to retrieve"),
         position: z.number().optional().describe("The position of the image to retrieve")
     },
     async ({id, type, position}) => {
@@ -112,6 +112,35 @@ server.tool(
                 ],
               };
           }
+
+        // If no type is specified, default to 'all'
+        if (!type) {  
+            type = 'all';
+        } 
+
+        if (type != 'all') {
+          const specificImage = artworkDetails.image.find((img: any) => img.type === type);
+          if (!specificImage) {
+            return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Failed to find image for type ${type} for the artwork with ID ${id}`,
+                  },
+                ],
+              };
+            }
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(specificImage),
+                },
+              ],
+            };
+        
+        }
 
         // If a specific position is requested, return just that image
         if (position !== undefined) {
@@ -133,11 +162,11 @@ server.tool(
                 content: [
                   {
                     type: "text",
-                    text: `Here is the ${type} image at position ${positionNum} for the artwork with ID ${id}: ${specificImage.urlImage}`
+                    text: JSON.stringify(specificImage),
                   },
                 ],
               };
-            }
+        }
             
         // Group images by type
         const imagesByType: Record<string, Image[]> = {};
@@ -168,7 +197,7 @@ server.tool(
                 content: [
                 {
                     type: "text",
-                    text: `Here are the images for the artwork with ID ${id}:\n${imageDetails}`
+                    text: JSON.stringify(imagesByType)
                 },
                 ],
             };
@@ -196,7 +225,7 @@ server.tool(
             content: [
             {
                 type: "text",
-                text: `Here are the images for the artwork with ID ${id} and type ${type}:\n${imageDetailsSelected}`
+                text: JSON.stringify(selectedImages)
             },
             ],
         };
