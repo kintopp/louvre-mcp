@@ -14,6 +14,16 @@ A Model Context Protocol (MCP) server for interacting with the Louvre museum's c
 npm install
 ```
 
+## Installation in Claude Desktop
+
+Get the code, build the project, and edit claude_desktop_config.json.
+Add: 
+"louvre": {
+      "command": "node",
+      "args": ["D:\\Path_to_projects\\louvreMCP\\build\\index.js"]
+    },
+
+    
 ## Usage
 
 Build the project:
